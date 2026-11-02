@@ -83,8 +83,9 @@ else
   OUT=$(/opt/nessus/sbin/nessuscli update "$TARBALL" 2>&1)
 fi
 echo "$OUT" | tail -25
-echo "$OUT" | grep -qiE "requires its detached signature|error|invalid|failed" && \
-  die "导入失败（见上方输出）"
+# 只认真正的失败信号；"[info] ... falling back to copy+delete" 这类提示里也带 failed，不能误判
+echo "$OUT" | grep -q "requires its detached signature" && die "缺少 detached 签名，10.10+ 引擎必须提供 .sig"
+echo "$OUT" | grep -qiE "^ *\*.*(error|invalid)|Update failed|not a valid" && die "导入失败（见上方输出）"
 echo "$OUT" | grep -q "Update successful" || die "未看到 Update successful，导入未完成"
 
 # 默认保留缓存包（1GB），重跑/重建容器都不必再下；要清理加 PURGE_CACHE=1
@@ -96,8 +97,17 @@ else
 fi
 
 # ---------- 4. feed 信息 ----------
-SET=$(grep -oE 'PLUGIN_SET[[:space:]]*=[[:space:]]*"[0-9]+"' "$VAR/.plugin_feed_info.inc" 2>/dev/null \
-      | grep -oE '[0-9]+' | head -1)
+# PLUGIN_SET 取值优先级：
+#   1) plugins.nessus.org 的当前 feed 时间戳（最新，避免插件集很快被判过期后触发重编）
+#   2) 插件包内自带的 .plugin_feed_info.inc
+# 注意：这个值一旦写定就不要再改，改动会让 nessusd 认为插件集变了，触发一次全量重编译。
+SET=$(curl -sk --max-time 10 https://plugins.nessus.org/v2/plugins.php 2>/dev/null | grep -oE '^[0-9]{10,}$' | head -1)
+[ -n "${SET:-}" ] && echo "      PLUGIN_SET 取自 plugins.php: $SET"
+if [ -z "${SET:-}" ]; then
+  SET=$(grep -oE 'PLUGIN_SET[[:space:]]*=[[:space:]]*"[0-9]+"' "$VAR/.plugin_feed_info.inc" 2>/dev/null \
+        | grep -oE '[0-9]+' | head -1)
+  [ -n "${SET:-}" ] && echo "      PLUGIN_SET 取自插件包: $SET"
+fi
 if [ -n "${SET:-}" ]; then
   printf 'PLUGIN_SET = "%s";\nPLUGIN_FEED = "ProfessionalFeed (Direct)";\nPLUGIN_FEED_TRANSPORT = "Tenable Network Security Lightning";\n' \
     "$SET" > "$VAR/plugin_feed_info.inc"
@@ -108,6 +118,9 @@ else
 fi
 
 # ---------- 5. 启动 ----------
+if /opt/nessus/sbin/nessuscli fix --list 2>/dev/null | grep -q "auto_update: yes"; then
+  /opt/nessus/sbin/nessuscli fix --set auto_update=no >/dev/null 2>&1 && echo "[5/6] 已关闭自动更新"
+fi
 echo "[5/6] 启动 nessusd，开始编译（346k 插件，4 核约 10-15 分钟）"
 : > "$MSG"
 /etc/init.d/nessusd start >/dev/null 2>&1

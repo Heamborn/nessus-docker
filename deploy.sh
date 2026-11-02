@@ -10,6 +10,8 @@ VERSION="${NESSUS_VERSION:-10.12.6}"
 NAME="${CONTAINER_NAME:-nessus}"
 PORT="${HOST_PORT:-8834}"
 URL="${1:-}"
+# 需要保留已编译插件库（重建容器免重编译）时：DATA_VOLUME=1 ./deploy.sh
+DATA_VOLUME="${DATA_VOLUME:-0}"
 
 cd "$(dirname "$0")"
 
@@ -20,10 +22,13 @@ echo "==> 启动容器 ${NAME} (宿主机端口 ${PORT})"
 if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
   docker rm -f "$NAME" >/dev/null
 fi
+VOL_ARGS="-v nessus_cache:/nessus/cache"
+[ "$DATA_VOLUME" = "1" ] && VOL_ARGS="$VOL_ARGS -v nessus_data:/opt/nessus/var/nessus -v nessus_plugins:/opt/nessus/lib/nessus/plugins"
+
 docker run -itd --name "$NAME" --restart always \
   -p "${PORT}:8834" \
+  $VOL_ARGS \
   -v nessus_cache:/nessus/cache \
-  -v nessus_data:/opt/nessus/var/nessus \
   "nessus:${VERSION}"
 
 sleep 20

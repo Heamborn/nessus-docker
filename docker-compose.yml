@@ -12,9 +12,12 @@ services:
     volumes:
       # 插件包缓存：留着就不用每次重下 1GB
       - nessus_cache:/nessus/cache
-      # 运行数据：用户/证书/已编译插件库（约 10GB），重建容器不用重新编译
-      - nessus_data:/opt/nessus/var/nessus
+      # 可选：持久化运行数据与插件本体。挂上后重建容器不用重新编译。
+      # 两条要成对出现（只有 var 没有 plugins，重建后照样得重编）。
+      # - nessus_data:/opt/nessus/var/nessus
+      # - nessus_plugins:/opt/nessus/lib/nessus/plugins
 
 volumes:
   nessus_cache:
-  nessus_data:
+  # nessus_data:
+  # nessus_plugins:

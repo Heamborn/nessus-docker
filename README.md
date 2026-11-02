@@ -69,12 +69,11 @@ docker build -t nessus:10.12.6 .
 docker run -itd --name nessus --restart always \
   -p 8834:8834 \
   -v nessus_cache:/nessus/cache \
-  -v nessus_data:/opt/nessus/var/nessus \
   nessus:10.12.6
 ```
 
-> Both `-v` flags matter. Without `nessus_cache` you re-download 1 GB every time; without `nessus_data`
-> every new container recompiles the plugin set for 20+ minutes.
+`-v nessus_cache:/nessus/cache` is recommended, otherwise every new container re-downloads 1 GB.
+Add `-v nessus_data:/opt/nessus/var/nessus` if you also want to keep the compiled state — see “Persistence”.
 
 Then open `https://<host-ip>:8834`. The certificate is self-signed — accept the browser warning.
 
@@ -210,18 +209,56 @@ looks up the real download id for `Nessus-<version>-ubuntu1604_amd64.deb`, and f
 asserts that the installed version matches the argument and fails otherwise. Rebuild the image and
 recreate the container afterwards.
 
-### Where the data lives
+### Persistence
 
-| Path | Content | Size |
+**Off by default**: the container's contents die with it, so recreating it means a 20-minute recompile.
+For throwaway use that is the simplest option.
+
+Measured difference on the same 4 vCPU / 5.8 GB host:
+
+| Setup | After recreating / restarting the container | Cost |
 |---|---|---|
-| `/opt/nessus/var/nessus` | users, certificates, compiled plugin DBs | ~10 GB |
-| `/nessus/cache` | downloaded tarball | ~1 GB |
-| `/opt/nessus/lib/nessus/plugins` | NASL sources and nbins | ~4.6 GB (inside the image) |
+| default (no data volumes) | full recompile, **~20 min** | nothing extra |
+| both data volumes mounted | loads the existing DB, **~100 s** | ~15 GB disk |
 
-The first two are Docker volumes, so `docker compose down` keeps them; use `docker compose down -v`
-to wipe everything.
+To skip the recompile, mount **both** paths (persisting only `var` leaves the plugin files missing, so it
+recompiles anyway):
 
----
+```bash
+# compose: uncomment these two lines in docker-compose.yml
+#   - nessus_data:/opt/nessus/var/nessus
+#   - nessus_plugins:/opt/nessus/lib/nessus/plugins
+docker compose up -d
+
+# script
+DATA_VOLUME=1 ./deploy.sh
+
+# plain docker
+-v nessus_data:/opt/nessus/var/nessus \
+-v nessus_plugins:/opt/nessus/lib/nessus/plugins
+```
+
+This only holds while `PLUGIN_SET` stays put — the scripts guarantee that (see “Two traps”). If you edit
+the plugin set version by hand, or import a new feed, it recompiles as expected.
+
+## Two traps (already handled by the scripts)
+
+**1. The plugin set gets marked stale and the server hangs at 503**
+
+Nessus periodically pulls the plugin feed on its own. With no reachable feed it ends up in
+`feed_status: downloading-failed` and the web UI spins forever. Both `start.sh` and `update.sh` run
+`nessuscli fix --set auto_update=no` first, closing that path — the feed only ever comes from your
+manual import.
+
+**2. Changing `PLUGIN_SET` once costs a full recompile**
+
+`PLUGIN_SET` in `plugin_feed_info.inc` is the fingerprint of the plugin set. If it does not match the
+plugin DB, nessusd throws the compiled DB away and recompiles (~20 minutes). Therefore:
+
+- `update.sh` writes it once at import time, preferring the live timestamp from
+  `plugins.nessus.org/v2/plugins.php` (newer than the value inside the tarball, so it ages out slower)
+  and falling back to the tarball value
+- `start.sh` only creates the file when it is missing — an existing one is never rewritten
 
 ## Verified numbers
 

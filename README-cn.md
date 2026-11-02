@@ -67,12 +67,11 @@ docker build -t nessus:10.12.6 .
 docker run -itd --name nessus --restart always \
   -p 8834:8834 \
   -v nessus_cache:/nessus/cache \
-  -v nessus_data:/opt/nessus/var/nessus \
   nessus:10.12.6
 ```
 
-> 两条 `-v` 都要带。少了 `nessus_cache` 每次重下 1 GB 插件包，少了 `nessus_data`
-> 每次重建容器都要重新编译二十多分钟。
+`-v nessus_cache:/nessus/cache` 建议带上，否则每次重建容器都要重下 1 GB 插件包。
+想要连编译结果一起保留，再加一条 `-v nessus_data:/opt/nessus/var/nessus`，见下面「要不要持久化」。
 
 起来之后打开 `https://<宿主机IP>:8834`。证书是自签的，浏览器会拦一下，点继续就行。
 
@@ -201,18 +200,52 @@ Dockerfile 里没有写死的下载链接：它会去 Tenable 的公开下载接
 `Nessus-<版本>-ubuntu1604_amd64.deb` 反查真实下载 id 再拉。构建最后会核对装出来的版本号和参数一致，
 不一致直接失败。改完版本号记得重建镜像、重建容器。
 
-### 数据放在哪
+### 要不要持久化
 
-| 路径 | 内容 | 大小 |
+默认**不持久化**：容器删了就没了，重建容器会重新编译二十多分钟。一次性用完就扔的场景，这样最省事。
+
+实测两种模式的差别（同一台 4 核 / 5.8 GB）：
+
+| 做法 | 重建/重启容器后 | 代价 |
 |---|---|---|
-| `/opt/nessus/var/nessus` | 用户、证书、已编译插件库 | 约 10 GB |
-| `/nessus/cache` | 下载下来的插件包 | 约 1 GB |
-| `/opt/nessus/lib/nessus/plugins` | NASL 源码与 nbin | 约 4.6 GB（在镜像内） |
+| 默认（不挂数据卷） | 重新编译，约 **20 分钟** | 不占额外磁盘 |
+| 挂上两个数据卷 | 直接加载已有插件库，约 **100 秒** | 多占约 15 GB |
 
-前两个都挂在 Docker 卷上，`docker compose down` 不会删；要彻底清干净用
-`docker compose down -v`。
+想省编译时间就把下面两条**成对**挂上（只挂 `var` 不挂 `plugins`，插件文件不在，照样得重编）：
 
----
+```bash
+# compose：把 docker-compose.yml 里这两行注释打开
+#   - nessus_data:/opt/nessus/var/nessus
+#   - nessus_plugins:/opt/nessus/lib/nessus/plugins
+docker compose up -d
+
+# 脚本
+DATA_VOLUME=1 ./deploy.sh
+
+# 原生 docker
+-v nessus_data:/opt/nessus/var/nessus \
+-v nessus_plugins:/opt/nessus/lib/nessus/plugins
+```
+
+前提是 `PLUGIN_SET` 不再变动——脚本已经保证这点（见下面「两个容易踩的坑」）。一旦手动改了插件集版本，
+或者导入了新的插件包，该重编还是得重编。
+
+## 两个容易踩的坑（脚本已经处理）
+
+**1. 插件集会被判过期，然后卡在 503**
+
+Nessus 每隔一段时间会自己联网拉插件 feed。离线环境里它拉不到，状态就停在
+`feed_status: downloading-failed`，网页一直转圈。`start.sh` 与 `update.sh` 都会先执行一次
+`nessuscli fix --set auto_update=no`，把这条路关掉，插件包只由你手动导入。
+
+**2. `PLUGIN_SET` 改动一次 = 全量重编译一次**
+
+`plugin_feed_info.inc` 里的 `PLUGIN_SET` 是插件集指纹，nessusd 会拿它和插件库对账，对不上就丢掉
+已经编译好的库重新编译（约二十分钟）。所以：
+
+- `update.sh` 导入时写一次，值优先取 `plugins.nessus.org/v2/plugins.php` 返回的当前时间戳
+  （比插件包自带的新，不容易很快被判过期），取不到才用插件包自带的值
+- `start.sh` 启动时**只在文件缺失时**生成，已有就原样沿用，绝不覆盖
 
 ## 实测数据
 
