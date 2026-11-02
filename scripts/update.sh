@@ -9,6 +9,9 @@
 #   /nessus/update.sh "<插件包URL>"               # 自动同时下载 .sig / .sha256 并校验
 #   /nessus/update.sh <本地tar.gz> [<本地sig>]    # 用已下载好的包
 #   /nessus/update.sh                             # 直接用 /nessus/cache/all-2.0.tar.gz
+#
+# 环境变量:
+#   PURGE_CACHE=1   导入成功后删除缓存的 tar.gz / .sig / .sha256（默认保留）
 set -u
 
 PLUGDIR=/opt/nessus/lib/nessus/plugins
@@ -84,8 +87,13 @@ echo "$OUT" | grep -qiE "requires its detached signature|error|invalid|failed" &
   die "导入失败（见上方输出）"
 echo "$OUT" | grep -q "Update successful" || die "未看到 Update successful，导入未完成"
 
-# 包已落地，删掉省空间（重跑需重新下载，可自行保留）
-rm -f "$TARBALL" "$SIG" "$SHA"
+# 默认保留缓存包（1GB），重跑/重建容器都不必再下；要清理加 PURGE_CACHE=1
+if [ "${PURGE_CACHE:-0}" = "1" ]; then
+  echo "      清理缓存包（PURGE_CACHE=1）"
+  rm -f "$TARBALL" "$SIG" "$SHA"
+else
+  echo "      缓存保留在 $CACHE（清理: PURGE_CACHE=1）"
+fi
 
 # ---------- 4. feed 信息 ----------
 SET=$(grep -oE 'PLUGIN_SET[[:space:]]*=[[:space:]]*"[0-9]+"' "$VAR/.plugin_feed_info.inc" 2>/dev/null \
