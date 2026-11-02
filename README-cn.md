@@ -145,6 +145,20 @@ docker exec -it nessus /nessus/update.sh "<插件包URL>"
 [6/6] 等待编译完成（轮询 /server/status）
 ```
 
+### 下载老是被掐断？
+
+`plugins.nessus.org` 走 Cloudflare，长连接常在中途静默停住（TCP 仍 ESTABLISHED，但不再收数据），
+而且服务端**不支持 Range 断点续传**——`update.sh` 里那条 wget 断了就得从头再来。用附带的抗抖动下载器：
+
+```bash
+docker cp scripts/fetch-feed.sh nessus:/nessus/
+docker exec -it nessus bash /nessus/fetch-feed.sh "<插件包URL>" /nessus/cache
+# 然后走本地包流程
+docker exec -it nessus /nessus/update.sh /nessus/cache/all-2.0.tar.gz /nessus/cache/all-2.0.tar.gz.sig
+```
+
+它做三件事：卡死检测（45 秒低于 200KB/s 就断开重来）、最多 12 轮重试、下完用 `.sha256` 校验。
+
 只用本地包（内网环境）：
 
 ```bash
@@ -201,7 +215,8 @@ Dockerfile 里没有任何硬编码下载链接：它会去
 ├── deploy.sh             # 构建 / 启动 / 可选更新插件
 └── scripts
     ├── start.sh          # PID1：改写 feed → 后台起 nessusd → 保活
-    └── update.sh         # 下载 / 校验 / 导入 / 等编译
+    ├── update.sh         # 下载 / 校验 / 导入 / 等编译
+    └── fetch-feed.sh     # 抗抖动的插件包下载器（卡死重试 + sha256）
 ```
 
 ---

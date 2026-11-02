@@ -145,6 +145,21 @@ Six explicit stages:
 [6/6] wait for completion (polls /server/status)
 ```
 
+### Download keeps stalling?
+
+`plugins.nessus.org` sits behind Cloudflare and long connections often go silent mid-transfer
+(TCP still ESTABLISHED, no more data). The server does **not** support Range requests, so an interrupted
+`wget` in `update.sh` has to start over. Use the bundled resilient downloader:
+
+```bash
+docker cp scripts/fetch-feed.sh nessus:/nessus/
+docker exec -it nessus bash /nessus/fetch-feed.sh "<PLUGIN_PACKAGE_URL>" /nessus/cache
+# then import from the local file
+docker exec -it nessus /nessus/update.sh /nessus/cache/all-2.0.tar.gz /nessus/cache/all-2.0.tar.gz.sig
+```
+
+It watches for stalls (aborts below 200 KB/s for 45 s), retries up to 12 times, then verifies `.sha256`.
+
 Offline / air-gapped:
 
 ```bash
@@ -201,7 +216,8 @@ Host: 4 vCPU / 5.8 GB RAM / Docker, package `all-2.0.tar.gz` (982 MB)
 ├── deploy.sh             # build / run / optional plugin update
 └── scripts
     ├── start.sh          # PID1: rewrite feed -> start nessusd in background -> keep alive
-    └── update.sh         # download / verify / import / wait for compile
+    ├── update.sh         # download / verify / import / wait for compile
+    └── fetch-feed.sh     # stall-resistant package downloader (+ sha256)
 ```
 
 ---
