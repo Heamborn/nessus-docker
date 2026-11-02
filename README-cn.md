@@ -88,9 +88,31 @@ docker exec -it nessus sh -c 'printf "YourPassw0rd\nYourPassw0rd\n" \
 
 ## 插件包 URL 怎么来
 
-1. 在 [tenable.com](https://www.tenable.com/products/nessus/nessus-essentials) 申请一个激活码
-2. 打开 [plugins.nessus.org/v2/offline.php](https://plugins.nessus.org/v2/offline.php)
-3. 填激活码 + 任意机器码（12~64 位十六进制，如 `aaaaaa11b2222cc33d44e5f6666a777b8cc99912`，别和别人重复）
+1. 在 [tenable.com](https://www.tenable.com/products/nessus/nessus-essentials) 申请／取得激活码（Activation Code）
+
+2. **让容器自己生成机器码（Challenge Code）**——必须由你要用的这套实例现场生成，不能随手编一串十六进制：
+
+   ```bash
+   docker exec nessus /opt/nessus/sbin/nessuscli fetch --challenge
+   ```
+
+   输出：
+
+   ```
+   Challenge code: 300db798b04cc3ae15070dc9075581a0de7c7657
+
+   You can copy the challenge code above and paste it alongside your
+   Activation Code at:
+   https://plugins.nessus.org/v2/offline.php
+   ```
+
+   这串 40 位十六进制就是本实例的机器码，Tenable 拿它和激活码一起签发插件包 URL，因此它和这套实例是绑定的：
+
+   - 换容器／重建实例后要重新获取，旧机器码签出来的 URL 仍可用，但语义上已不是当前实例
+   - 同一串机器码不要多人共用，否则插件包 URL 会互相覆盖授权
+
+3. 打开 [plugins.nessus.org/v2/offline.php](https://plugins.nessus.org/v2/offline.php)，把 **激活码 + 上一步的 Challenge code** 一起填进去
+
 4. 得到形如下面的 URL：
 
 ```

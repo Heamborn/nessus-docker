@@ -89,8 +89,30 @@ Open `https://<host-ip>:8834` (self-signed certificate — the browser warning i
 ## Where the plugin URL comes from
 
 1. Request an activation code at [tenable.com](https://www.tenable.com/products/nessus/nessus-essentials)
-2. Open [plugins.nessus.org/v2/offline.php](https://plugins.nessus.org/v2/offline.php)
-3. Enter the activation code plus any machine code in hex (e.g. `aaaaaa11b2222cc33d44e5f6666a777b8cc99912`, keep it unique)
+
+2. **Let the container generate the machine code (Challenge Code)** — it has to come from the instance you are actually going to use; do not invent a hex string:
+
+   ```bash
+   docker exec nessus /opt/nessus/sbin/nessuscli fetch --challenge
+   ```
+
+   Output:
+
+   ```
+   Challenge code: 300db798b04cc3ae15070dc9075581a0de7c7657
+
+   You can copy the challenge code above and paste it alongside your
+   Activation Code at:
+   https://plugins.nessus.org/v2/offline.php
+   ```
+
+   That 40-hex-digit value is this instance's machine code. Tenable signs the plugin URL against it together with the activation code, so it is bound to this instance:
+
+   - Re-fetch it after recreating the container — an old code still yields a working URL, but it no longer represents the current instance
+   - Do not share one code between several deployments, or their plugin URLs will overwrite each other's entitlement
+
+3. Open [plugins.nessus.org/v2/offline.php](https://plugins.nessus.org/v2/offline.php) and enter the **activation code plus the challenge code from the previous step**
+
 4. You get a URL like:
 
 ```
