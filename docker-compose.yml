@@ -1,0 +1,17 @@
+services:
+  nessus:
+    build:
+      context: .
+      args:
+        NESSUS_VERSION: "10.12.6"
+    image: nessus:10.12.6
+    container_name: nessus
+    restart: always
+    ports:
+      - "8834:8834"
+    volumes:
+      # 插件包缓存：留着就不用每次重下 1GB
+      - nessus_cache:/nessus/cache
+
+volumes:
+  nessus_cache:
