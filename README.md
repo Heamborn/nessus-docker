@@ -9,6 +9,8 @@
 ![plugins](https://img.shields.io/badge/plugin%20set-202610032324-success)
 ![plugins loaded](https://img.shields.io/badge/plugins-347%2C631-brightgreen)
 
+[🇨🇳 简体中文](./README-cn.md) ｜ [🇺🇸 English](./README.md)
+
 </div>
 
 In one line: **pick the Nessus engine version at `docker build` time**, then import the current plugin

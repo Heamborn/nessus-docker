@@ -9,6 +9,8 @@
 ![plugins](https://img.shields.io/badge/plugin%20set-202610032324-success)
 ![plugins loaded](https://img.shields.io/badge/plugins-347%2C631-brightgreen)
 
+[🇨🇳 简体中文](./README-cn.md) ｜ [🇺🇸 English](./README.md)
+
 </div>
 
 一句话：**`docker build` 时说要用哪版 Nessus，就装哪版**；`update.sh` 一条命令把最新插件包导进去，
