@@ -74,6 +74,10 @@ docker run -itd --name nessus --restart always \
 docker exec -it nessus /nessus/update.sh "<PLUGIN_PACKAGE_URL>"
 ```
 
+> Data persistence: `/opt/nessus/var/nessus` is a volume (`nessus_data`, ~10 GB with users,
+> certificates and the compiled plugin DBs) so recreating the container does not recompile;
+> `/nessus/cache` holds the 1 GB tarball. With plain `docker run`, pass **both** `-v` flags.
+
 ### First login
 
 ```bash

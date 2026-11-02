@@ -51,8 +51,9 @@ COPY scripts/start.sh /nessus/start.sh
 COPY scripts/update.sh /nessus/update.sh
 RUN chmod +x /nessus/start.sh /nessus/update.sh
 
-# 插件包缓存目录，建议挂卷，重装容器后无需重新下载 1GB
-VOLUME ["/nessus/cache"]
+# /nessus/cache      插件包缓存（1GB，重装容器不必重下）
+# /opt/nessus/var/nessus  运行数据（用户/证书/插件库约 10GB，不挂卷则重建容器要重编 20 分钟）
+VOLUME ["/nessus/cache", "/opt/nessus/var/nessus"]
 
 EXPOSE 8834
 

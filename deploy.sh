@@ -23,6 +23,7 @@ fi
 docker run -itd --name "$NAME" --restart always \
   -p "${PORT}:8834" \
   -v nessus_cache:/nessus/cache \
+  -v nessus_data:/opt/nessus/var/nessus \
   "nessus:${VERSION}"
 
 sleep 20

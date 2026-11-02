@@ -74,6 +74,10 @@ docker run -itd --name nessus --restart always \
 docker exec -it nessus /nessus/update.sh "<插件包URL>"
 ```
 
+> 数据持久化：`/opt/nessus/var/nessus` 挂 `nessus_data` 卷（约 10 GB，含用户、证书、已编译插件库），
+> 重建容器不必重新编译；`/nessus/cache` 挂 `nessus_cache` 卷（1 GB 插件包）。
+> 用纯 `docker run` 时两条 `-v` 都要带，否则换镜像等于重新编译 20 分钟。
+
 ### 首次登入
 
 ```bash

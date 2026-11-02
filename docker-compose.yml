@@ -12,6 +12,9 @@ services:
     volumes:
       # 插件包缓存：留着就不用每次重下 1GB
       - nessus_cache:/nessus/cache
+      # 运行数据：用户/证书/已编译插件库（约 10GB），重建容器不用重新编译
+      - nessus_data:/opt/nessus/var/nessus
 
 volumes:
   nessus_cache:
+  nessus_data:
