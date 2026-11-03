@@ -145,23 +145,12 @@ nessusd 会拿 `plugin_feed_info.inc` 和插件内容对账，不一致就打印
 - `PLUGIN_SET` 要从包内 `plugin_feed_info.inc` 直接读，**不能**用 `plugins.php` 的当前时间戳（那个一直在变）
 - `PLUGIN_FEED` 要跟包一致（免费包是 `HomeFeed (Non-commercial use only)`），不要硬写成 `ProfessionalFeed`
 
-**3. 未注册实例会被清空；自动更新会把服务卡在 503**
+**3. 必须先注册，并关掉自动更新**
 
-- 实例未注册时也能导入编译，但收尾校验授权失败 → 清空插件。所以 `ACTIVATION_CODE` 不是可选项
-- Nessus 会自己联网拉 feed，拉不到就停在 `feed_status: downloading-failed`，网页一直转圈。
-  `start.sh` 和 `update.sh` 都会先 `nessuscli fix --set auto_update=no`
+没注册的实例也能导入编译，但收尾时会被清空，等于白跑。所以 `ACTIVATION_CODE` 不是可选项。
 
----
-
-## 授权说明（重要）
-
-| 方式 | 结果 | 说明 |
-|---|---|---|
-| 官方激活码（本仓库默认） | `license.type = essentials`，IP 数、到期时间由激活码决定 | 合法、可自动更新、可长期使用；插件包也可换成在线自动更新 |
-| SecurityCenter 托管模式（`nessuscli fetch --security-center`） | `license.type = sc_scanner`，`ips = 2147483647`，无到期 | 看起来"不限 IP"，但授权校验由 SC 侧完成；本地无有效 SC 授权时，编译收尾仍会 `Could not validate the license` 并清空插件 |
-
-结论：**想要稳定可用，就老老实实用激活码注册。** 网上流传的"无限 IP"是 SC 托管态，
-只有在 SecurityCenter 侧确实授权过扫描端时才成立，凭一个 Essentials 激活码复现不出来。
+另外 Nessus 会自己联网拉 feed，拉不到就停在 `feed_status: downloading-failed`，网页一直转圈。
+`start.sh` 和 `update.sh` 都会先执行 `nessuscli fix --set auto_update=no`。
 
 ---
 
@@ -230,7 +219,7 @@ docker build --build-arg NESSUS_VERSION=10.12.6 -t nessus:10.12.6 .
 ├── docker-compose.yml    # 一键起，带插件包缓存卷
 ├── deploy.sh             # 构建 / 启动 / 可选更新
 └── scripts
-    ├── start.sh          # PID1：按需激活 → 写 feed → 关自动更新 → 托管 nessusd → 保活
+    ├── start.sh          # PID1：按需激活 → 写 feed → 关自动更新 → 后台托管 nessusd → 保活
     ├── update.sh         # 下载 / 校验 / 导入 / 写指纹 / 等编译
     └── fetch-feed.sh     # 抗抖动下载器（卡死重试 + sha256）
 ```

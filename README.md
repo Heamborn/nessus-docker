@@ -146,24 +146,13 @@ nessusd reconciles `plugin_feed_info.inc` against the plugin content; on mismatc
   whose timestamp keeps moving
 - keep `PLUGIN_FEED` as shipped (`HomeFeed (Non-commercial use only)`); do not force `ProfessionalFeed`
 
-**3. An unregistered instance gets wiped, and auto-update hangs the UI at 503**
+**3. Registration is mandatory, and auto-update must be off**
 
-- unregistered instances still import and compile, but the licence check at the end fails and everything is purged
-- Nessus tries to pull the feed on its own and ends in `feed_status: downloading-failed`. Both `start.sh`
-  and `update.sh` run `nessuscli fix --set auto_update=no` first
+An unregistered instance still imports and compiles, but everything is cleared at the end — wasted effort.
+So `ACTIVATION_CODE` is not optional.
 
----
-
-## Licensing
-
-| Approach | Result | Notes |
-|---|---|---|
-| Official activation code (default here) | `license.type = essentials`; IPs and expiry come from the code | legitimate, updatable, long-lived |
-| SecurityCenter managed mode (`fetch --security-center`) | `license.type = sc_scanner`, `ips = 2147483647`, no expiry | looks "unlimited", but licence validation is delegated to the SC manager; without a valid SC-side authorisation the compile still ends in `Could not validate the license` and a purge |
-
-In short: **register with a real activation code if you want a stable scanner.** The widely circulated
-"unlimited" mode is the SC-managed scanner, which only holds when SecurityCenter really authorised that
-scanner — it cannot be reproduced from an Essentials code.
+Nessus also tries to pull the feed on its own and ends in `feed_status: downloading-failed`, leaving the UI
+spinning. Both `start.sh` and `update.sh` run `nessuscli fix --set auto_update=no` first.
 
 ---
 
