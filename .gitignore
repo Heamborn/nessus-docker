@@ -10,3 +10,6 @@ all-2.0.tar.gz.sha256
 .idea/
 .vscode/
 .DS_Store
+
+# 本地环境变量（含激活码，不要提交）
+.env

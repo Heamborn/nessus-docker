@@ -39,48 +39,34 @@ NASL 插件编译完。这个仓库把这套流程固化成一个**完全自建*
 
 ---
 
-## 快速开始
+## 快速开始（docker compose）
 
-### 1. 构建
+### 1. 准备配置
 
 ```bash
 git clone https://github.com/Heamborn/nessus-docker.git
 cd nessus-docker
-
-docker compose build
-# 或
-docker build -t nessus:10.12.6 .
+cp .env.example .env
+vi .env          # 填 ACTIVATION_CODE；拉不动 Docker Hub 就把 BASE_IMAGE 换成 ecr 那行
 ```
 
-如果拉不动 Docker Hub（`registry-1.docker.io` 超时），换官方公共镜像源即可，不用配代理：
+`.env` 支持四个键：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `ACTIVATION_CODE` | 空 | 激活码，首次启动自动注册一次；留空会被清空插件 |
+| `NESSUS_VERSION` | `10.12.6` | 引擎版本，同时决定镜像 tag |
+| `BASE_IMAGE` | `ubuntu:22.04` | 拉不动 Docker Hub 时改 `public.ecr.aws/docker/library/ubuntu:22.04` |
+| `HOST_PORT` | `8834` | 宿主机端口 |
+
+### 2. 构建并启动
 
 ```bash
-docker build --build-arg BASE_IMAGE=public.ecr.aws/docker/library/ubuntu:22.04 -t nessus:10.12.6 .
+docker compose build      # 构建镜像（会现下 Nessus deb，约 1-2 分钟）
+docker compose up -d      # 启动，端口 8834
+docker compose ps         # 看状态
+docker compose logs -f    # 看启动日志，出现 "Nessus is ready" 即可
 ```
-
-### 2. 启动并激活
-
-激活码通过环境变量传进去，容器**首次启动会自己注册一次**，之后不再重复：
-
-```bash
-docker run -itd --name nessus --restart always \
-  -p 8834:8834 \
-  -e ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XXXX \
-  -v nessus_cache:/nessus/cache \
-  nessus:10.12.6
-```
-
-compose 用户在 `docker-compose.yml` 里填 `environment: ACTIVATION_CODE`。
-
-离线环境用 license 文件代替激活码（`fetch --challenge` → offline.php 换回来的那个文件）：
-
-```bash
--v /path/to/license.lic:/nessus/license.lic \
--e NESSUS_LICENSE_FILE=/nessus/license.lic
-```
-
-> 激活码是**一次性**的：注册成功后它与这台实例绑定，再拿去注册别的实例会被 Tenable 拒（400）。
-> 重新部署请申请新码，或者把已注册实例的 `/opt/nessus/var/nessus` 与 `/opt/nessus/etc/nessus` 一起保留下来复用。
 
 ### 3. 进后台
 
@@ -126,6 +112,59 @@ docker exec -it nessus /nessus/update.sh "<上一步的地址>"
       插件库: 1815 MB
       访问: https://<本机IP>:8834
 ```
+
+### compose 常用命令
+
+| 目的 | 命令 |
+|---|---|
+| 改完 `.env` 重建镜像 | `docker compose build --no-cache && docker compose up -d` |
+| 只重启 | `docker compose restart` |
+| 停掉但保留数据 | `docker compose stop` |
+| 删除容器（保留插件包缓存卷） | `docker compose down` |
+| 连插件包缓存一起删 | `docker compose down -v` |
+| 看容器日志 | `docker compose logs -f` |
+| 进容器排查 | `docker exec -it nessus bash` |
+
+> 想重建容器后**不用重新编译**，把 `docker-compose.yml` 里 `nessus_data` 和 `nessus_plugins`
+> 两行注释打开（必须成对），再 `docker compose up -d`。
+
+---
+
+## 不用 compose 的话
+
+```bash
+docker build -t nessus:10.12.6 .
+
+docker run -itd --name nessus --restart always \
+  -p 8834:8834 \
+  -e ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XXXX \
+  -v nessus_cache:/nessus/cache \
+  nessus:10.12.6
+```
+
+拉不动 Docker Hub 时构建加一个参数：
+
+```bash
+docker build --build-arg BASE_IMAGE=public.ecr.aws/docker/library/ubuntu:22.04 -t nessus:10.12.6 .
+```
+
+或者用自带脚本（等价于 compose 的 build + up）：
+
+```bash
+ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XXXX ./deploy.sh
+```
+
+离线环境用 license 文件代替激活码（`fetch --challenge` → offline.php 换回来的那个文件）：
+
+```bash
+docker run -itd --name nessus -p 8834:8834 \
+  -v /path/to/license.lic:/nessus/license.lic \
+  -e NESSUS_LICENSE_FILE=/nessus/license.lic \
+  -v nessus_cache:/nessus/cache nessus:10.12.6
+```
+
+> 激活码是**一次性**的：注册成功后与这台实例绑定，再拿去注册别的实例会被拒（400）。
+> 重新部署请申请新码，或保留已注册实例的 `/opt/nessus/var/nessus` 与 `/opt/nessus/etc/nessus` 复用。
 
 ---
 
@@ -217,6 +256,7 @@ docker build --build-arg NESSUS_VERSION=10.12.6 -t nessus:10.12.6 .
 .
 ├── Dockerfile            # ubuntu:22.04 + 官方 deb + OpenJDK8，引擎版本可选
 ├── docker-compose.yml    # 一键起，带插件包缓存卷
+├── .env.example          # compose 配置模板（复制成 .env 用）
 ├── deploy.sh             # 构建 / 启动 / 可选更新
 └── scripts
     ├── start.sh          # PID1：按需激活 → 写 feed → 关自动更新 → 后台托管 nessusd → 保活

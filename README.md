@@ -40,47 +40,34 @@ official installer pulled from Tenable's download API at build time.
 
 ---
 
-## Quick start
+## Quick start (docker compose)
 
-### 1. Build
+### 1. Configure
 
 ```bash
 git clone https://github.com/Heamborn/nessus-docker.git
 cd nessus-docker
-
-docker compose build
-# or
-docker build -t nessus:10.12.6 .
+cp .env.example .env
+vi .env          # set ACTIVATION_CODE; if Docker Hub is unreachable, switch BASE_IMAGE to the ecr line
 ```
 
-If Docker Hub is unreachable (`registry-1.docker.io` timing out), use the public mirror — no proxy needed:
+`.env` keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ACTIVATION_CODE` | empty | activation code, registered once on first boot; empty means plugins get wiped later |
+| `NESSUS_VERSION` | `10.12.6` | engine version, also used as the image tag |
+| `BASE_IMAGE` | `ubuntu:22.04` | use `public.ecr.aws/docker/library/ubuntu:22.04` when Docker Hub is blocked |
+| `HOST_PORT` | `8834` | host port |
+
+### 2. Build and start
 
 ```bash
-docker build --build-arg BASE_IMAGE=public.ecr.aws/docker/library/ubuntu:22.04 -t nessus:10.12.6 .
+docker compose build      # builds the image (downloads the Nessus deb, 1-2 min)
+docker compose up -d      # start on port 8834
+docker compose ps         # status
+docker compose logs -f    # follow logs until "Nessus is ready"
 ```
-
-### 2. Run and activate
-
-The activation code goes in as an env var; the container registers itself **once** on first boot:
-
-```bash
-docker run -itd --name nessus --restart always \
-  -p 8834:8834 \
-  -e ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XXXX \
-  -v nessus_cache:/nessus/cache \
-  nessus:10.12.6
-```
-
-For air-gapped setups use a license file instead (`fetch --challenge` → offline.php):
-
-```bash
--v /path/to/license.lic:/nessus/license.lic \
--e NESSUS_LICENSE_FILE=/nessus/license.lic
-```
-
-> Activation codes are **single-use**: once registered, the code is bound to that instance and Tenable
-> rejects re-use elsewhere (HTTP 400). Request a fresh code for a new deployment, or keep the registered
-> instance's `/opt/nessus/var/nessus` and `/opt/nessus/etc/nessus` and reuse them.
 
 ### 3. Log in
 
@@ -126,6 +113,60 @@ Six stages: download → verify sha256 and fetch `.sig` → stop the service →
       插件库: 1815 MB
       访问: https://<本机IP>:8834
 ```
+
+### Compose cheat sheet
+
+| Goal | Command |
+|---|---|
+| Rebuild after editing `.env` | `docker compose build --no-cache && docker compose up -d` |
+| Restart only | `docker compose restart` |
+| Stop, keep data | `docker compose stop` |
+| Remove container, keep the package cache volume | `docker compose down` |
+| Remove volumes too | `docker compose down -v` |
+| Follow logs | `docker compose logs -f` |
+| Shell into the container | `docker exec -it nessus bash` |
+
+> To rebuild the container **without recompiling**, uncomment both `nessus_data` and `nessus_plugins`
+> mounts in `docker-compose.yml` (they must come as a pair), then `docker compose up -d`.
+
+---
+
+## Without compose
+
+```bash
+docker build -t nessus:10.12.6 .
+
+docker run -itd --name nessus --restart always \
+  -p 8834:8834 \
+  -e ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XXXX \
+  -v nessus_cache:/nessus/cache \
+  nessus:10.12.6
+```
+
+Blocked Docker Hub? Add one build arg:
+
+```bash
+docker build --build-arg BASE_IMAGE=public.ecr.aws/docker/library/ubuntu:22.04 -t nessus:10.12.6 .
+```
+
+Or use the bundled script (same as compose build + up):
+
+```bash
+ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XXXX ./deploy.sh
+```
+
+Air-gapped, using a license file instead of a code (`fetch --challenge` → offline.php):
+
+```bash
+docker run -itd --name nessus -p 8834:8834 \
+  -v /path/to/license.lic:/nessus/license.lic \
+  -e NESSUS_LICENSE_FILE=/nessus/license.lic \
+  -v nessus_cache:/nessus/cache nessus:10.12.6
+```
+
+> Activation codes are **single-use**: once registered, the code is bound to that instance and Tenable
+> rejects re-use elsewhere (HTTP 400). Request a fresh code for a new deployment, or keep the registered
+> instance's `/opt/nessus/var/nessus` and `/opt/nessus/etc/nessus` and reuse them.
 
 ---
 
@@ -215,6 +256,7 @@ plugin files missing and it recompiles anyway.
 .
 ├── Dockerfile            # ubuntu:22.04 + official deb + OpenJDK8, engine version selectable
 ├── docker-compose.yml    # one-shot bring-up with the package cache volume
+├── .env.example          # compose settings template (copy to .env)
 ├── deploy.sh             # build / run / optional feed update
 └── scripts
     ├── start.sh          # PID1: activate → write feed → disable auto-update → supervise nessusd

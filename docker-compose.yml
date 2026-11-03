@@ -3,22 +3,22 @@ services:
     build:
       context: .
       args:
-        # 拉不动 Docker Hub 时改成 public.ecr.aws/docker/library/ubuntu:22.04
-        BASE_IMAGE: ubuntu:22.04
-        NESSUS_VERSION: "10.12.6"
-    image: nessus:10.12.6
+        # 拉不动 Docker Hub 时用：public.ecr.aws/docker/library/ubuntu:22.04
+        BASE_IMAGE: ${BASE_IMAGE:-ubuntu:22.04}
+        NESSUS_VERSION: ${NESSUS_VERSION:-10.12.6}
+    image: nessus:${NESSUS_VERSION:-10.12.6}
     container_name: nessus
     restart: always
     environment:
-      # 首次启动自动注册；不填则实例停在未注册状态，插件会被清空
+      # 首次启动自动注册；留空则实例停在未注册状态，导入编译后会被清空
       - ACTIVATION_CODE=${ACTIVATION_CODE:-}
     ports:
-      - "8834:8834"
+      - "${HOST_PORT:-8834}:8834"
     volumes:
       # 插件包缓存：留着就不用每次重下 1GB
       - nessus_cache:/nessus/cache
-      # 可选：持久化运行数据与插件本体。挂上后重建容器不用重新编译。
-      # 两条要成对出现（只有 var 没有 plugins，重建后照样得重编）。
+      # 可选：持久化运行数据与插件本体，重建容器不用重新编译（约省 25 分钟）。
+      # 两条要成对出现，只挂 var 不挂 plugins 照样得重编。
       # - nessus_data:/opt/nessus/var/nessus
       # - nessus_plugins:/opt/nessus/lib/nessus/plugins
 
