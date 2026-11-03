@@ -32,7 +32,7 @@ NASL 插件编译完。这个仓库把这套流程固化成一个**完全自建*
 | 项 | 要求 | 说明 |
 |---|---|---|
 | Docker | 20.10+ | compose 需 v2 |
-| 内存 | ≥ 6 GB | 4 核 5.8 GB 实测编译约 25 分钟 |
+| 内存 | ≥ 6 GB | 4 核 6G 实测编译约 25 分钟 |
 | 磁盘 | ≥ 15 GB | 插件 4.6 GB + 编译产物 4.6 GB + 插件包 1 GB |
 | 出网 | `www.tenable.com`（拉安装包）、`plugins.nessus.org`（拉插件包） | 构建期与更新期各一次 |
 | 一个 Nessus 激活码 | 去 [tenable.com](https://www.tenable.com/products/nessus/nessus-essentials) 申请，免费 | 每个实例用一次，用完即绑定 |
@@ -183,7 +183,7 @@ docker build --build-arg NESSUS_VERSION=10.12.6 -t nessus:10.12.6 .
 
 ## 实测数据
 
-4 核 / 5.8 GB，`ubuntu:22.04` + Nessus 10.12.6 + OpenJDK 8，插件包 982 MB：
+4 核 / 6G，`ubuntu:22.04` + Nessus 10.12.6 + OpenJDK 8，插件包 982 MB：
 
 | 项 | 结果 |
 |---|---|

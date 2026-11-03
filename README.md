@@ -33,7 +33,7 @@ official installer pulled from Tenable's download API at build time.
 | Item | Need | Why |
 |---|---|---|
 | Docker | 20.10+ | compose needs v2 |
-| RAM | ≥ 6 GB | measured: ~25 min compile on 4 vCPU / 5.8 GB |
+| RAM | ≥ 6 GB | measured: ~25 min compile on 4 vCPU / 6 GB |
 | Disk | ≥ 15 GB | 4.6 GB plugins + 4.6 GB DBs + 1 GB tarball |
 | Network | `www.tenable.com`, `plugins.nessus.org` | installer at build time, feed at update time |
 | One activation code | free from [tenable.com](https://www.tenable.com/products/nessus/nessus-essentials) | one per instance, bound on first use |
@@ -181,7 +181,7 @@ plugin files missing and it recompiles anyway.
 
 ## Verified numbers
 
-4 vCPU / 5.8 GB, `ubuntu:22.04` + Nessus 10.12.6 + OpenJDK 8, feed package 982 MB:
+4 vCPU / 6 GB, `ubuntu:22.04` + Nessus 10.12.6 + OpenJDK 8, feed package 982 MB:
 
 | Item | Result |
 |---|---|
