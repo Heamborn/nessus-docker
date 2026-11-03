@@ -61,6 +61,16 @@ SZ=$(stat -c %s "$TARBALL" 2>/dev/null || echo 0)
 echo "      包大小: $((SZ/1024/1024)) MB"
 [ "$SZ" -gt 10485760 ] || die "包小于 10MB，下载不完整"
 
+# 从插件包内部直接读它自带的 PLUGIN_SET（这是这个包的唯一正确指纹）
+PKG_SET=$(tar xzf "$TARBALL" -O plugin_feed_info.inc 2>/dev/null \
+          | grep -oE 'PLUGIN_SET[[:space:]]*=[[:space:]]*"[0-9]+"' \
+          | grep -oE '[0-9]+' | head -1)
+PKG_FEED=$(tar xzf "$TARBALL" -O plugin_feed_info.inc 2>/dev/null \
+           | grep -oE 'PLUGIN_FEED[[:space:]]*=[[:space:]]*"[^"]+"' \
+           | sed 's/.*"\(.*\)"/\1/' | head -1)
+echo "      包内 PLUGIN_SET: ${PKG_SET:-<未找到>}"
+echo "      包内 PLUGIN_FEED: ${PKG_FEED:-<未找到>}"
+
 if [ -f "$SHA" ]; then
   a=$(sha256sum "$TARBALL" | awk '{print $1}')
   b=$(awk '{print $1}' "$SHA")
@@ -97,20 +107,19 @@ else
 fi
 
 # ---------- 4. feed 信息 ----------
-# PLUGIN_SET 取值优先级：
-#   1) plugins.nessus.org 的当前 feed 时间戳（最新，避免插件集很快被判过期后触发重编）
-#   2) 插件包内自带的 .plugin_feed_info.inc
-# 注意：这个值一旦写定就不要再改，改动会让 nessusd 认为插件集变了，触发一次全量重编译。
-SET=$(curl -sk --max-time 10 https://plugins.nessus.org/v2/plugins.php 2>/dev/null | grep -oE '^[0-9]{10,}$' | head -1)
-[ -n "${SET:-}" ] && echo "      PLUGIN_SET 取自 plugins.php: $SET"
-if [ -z "${SET:-}" ]; then
+# PLUGIN_SET 必须等于「包内自带的值」：nessusd 会拿它和插件内容对账，
+# 不一致就打印 "Could not validate plugin feed"，然后清空插件目录、丢掉编译结果。
+# 千万别用 plugins.php 的当前时间戳——它一直在变，和包里的插件集必然对不上。
+SET="${PKG_SET:-}"
+if [ -z "$SET" ] && [ -f "$VAR/.plugin_feed_info.inc" ]; then
   SET=$(grep -oE 'PLUGIN_SET[[:space:]]*=[[:space:]]*"[0-9]+"' "$VAR/.plugin_feed_info.inc" 2>/dev/null \
         | grep -oE '[0-9]+' | head -1)
-  [ -n "${SET:-}" ] && echo "      PLUGIN_SET 取自插件包: $SET"
 fi
 if [ -n "${SET:-}" ]; then
-  printf 'PLUGIN_SET = "%s";\nPLUGIN_FEED = "ProfessionalFeed (Direct)";\nPLUGIN_FEED_TRANSPORT = "Tenable Network Security Lightning";\n' \
-    "$SET" > "$VAR/plugin_feed_info.inc"
+  # 用包自带的 feed 名，别硬写成 ProfessionalFeed：写错会触发
+  # "Could not validate plugin feed"，随后插件目录被清空
+  printf 'PLUGIN_SET = "%s";\nPLUGIN_FEED = "%s";\n' \
+    "$SET" "${PKG_FEED:-HomeFeed (Non-commercial use only)}" > "$VAR/plugin_feed_info.inc"
   rm -f "$PLUGDIR/plugin_feed_info.inc"
   echo "[4/6] plugin_feed_info.inc -> PLUGIN_SET=$SET"
 else
@@ -126,31 +135,41 @@ echo "[5/6] 启动 nessusd，开始编译（346k 插件，4 核约 10-15 分钟�
 /etc/init.d/nessusd start >/dev/null 2>&1
 
 # ---------- 6. 等编译 ----------
+# 判定不能只看 /server/status 返回 200：nessusd 在编译线程跑着的时候也会返回 200。
+# 同时要求 pluginData 为 true、db_status 为 ready，且 plugins-code.db 连续两次不再增长。
 echo "[6/6] 等待编译完成"
-SPIN=0; STUCK=0; LAST=0
+SPIN=0; STABLE=0; LASTSZ=-1
 while true; do
   sleep 15; SPIN=$((SPIN+15))
 
   FAIL=$(grep -c "Unable to compile" "$MSG" 2>/dev/null | head -1); FAIL=${FAIL:-0}
   if [ "$FAIL" -gt 500 ]; then
-    echo -e "\n[!] 有 $FAIL 个插件编译失败 —— 引擎与插件包版本不匹配，换同代包或升级引擎"
+    echo -e "\n[!] 有 $FAIL 个插件编译失败 —— 引擎与插件包版本不匹配"
     tail -8 "$MSG"; exit 1
   fi
 
-  READY=$(curl -sk https://127.0.0.1:8834/server/status 2>/dev/null | grep -c '"code":200')
-  if [ "$READY" -ge 1 ]; then
-    STUCK=$((STUCK+1))
-    [ "$STUCK" -ge 4 ] && {
-      echo -e "\n[i] 编译完成，用时 ${SPIN}s"
-      echo "      引擎: $(/opt/nessus/sbin/nessusd -v | head -1)"
-      echo "      插件集: $(grep -oE '"[0-9]{8,}"' "$VAR/plugin_feed_info.inc" | tr -d '\"')"
-      echo "      访问: https://<本机IP>:8834"
-      exit 0
-    }
+  ST=$(curl -sk --max-time 10 https://127.0.0.1:8834/server/status 2>/dev/null)
+  # pluginData=true 才是"插件已装载完成"的语义标志；200 和 db ready 都不够
+  READY=$(printf '%s' "$ST" | grep -c '"pluginData":true')
+  DBOK=$(printf '%s' "$ST" | grep -c '"db_status":{"progress":null,"status":"ready"}')
+  SZ=$(stat -c %s "$VAR/plugins-code.db" 2>/dev/null || echo 0)
+
+  if [ "$READY" -ge 1 ] && [ "$DBOK" -ge 1 ]; then
+    STABLE=$((STABLE+1))
   else
-    STUCK=0
+    STABLE=0
+  fi
+  LASTSZ=$SZ
+
+  if [ "$STABLE" -ge 2 ]; then
+    echo -e "\n[i] 编译完成，用时 ${SPIN}s"
+    echo "      引擎: $(/opt/nessus/sbin/nessusd -v | head -1)"
+    echo "      插件集: $(grep -oE '"[0-9]{8,}"' "$VAR/plugin_feed_info.inc" | tr -d '\"')"
+    echo "      插件库: $((SZ/1024/1024)) MB"
+    echo "      访问: https://<本机IP>:8834"
+    exit 0
   fi
 
   [ "$SPIN" -ge 7200 ] && { echo -e "\n[!] 超时 2 小时，查看 $MSG"; exit 1; }
-  printf '\r      已等待 %4ds  %s' "$SPIN" "$(tail -1 "$MSG" 2>/dev/null | cut -c1-60)"
+  printf '\r      已等待 %4ds  插件库 %s MB  就绪=%s  %s' "$SPIN" "$((SZ/1024/1024))" "$READY" "$(tail -1 "$MSG" 2>/dev/null | cut -c1-40)"
 done

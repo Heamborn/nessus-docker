@@ -2,11 +2,12 @@
 
 # nessus-docker
 
-**一条命令把 Nessus 装进 Docker，插件包随用随更新，引擎版本想换就换**
+**用官方安装包自己构建 Nessus 容器：基础镜像自建、引擎版本可选、插件包一条命令更新**
 
 ![docker](https://img.shields.io/badge/docker-compose%20%7C%20docker%20run-2496ED)
 ![engine](https://img.shields.io/badge/Nessus-10.12.6-00a4e4)
-![plugins](https://img.shields.io/badge/plugins-347%2C631-brightgreen)
+![plugins](https://img.shields.io/badge/plugins-347%2C672-brightgreen)
+![base](https://img.shields.io/badge/base-ubuntu%3A22.04-orange)
 
 [🇺🇸 English](./README.md)
 
@@ -16,17 +17,13 @@
 
 ## 这是什么
 
-Nessus 是商业漏洞扫描器，官方不给免安装的容器包：你得自己下 `.deb`、自己解决激活、自己等它把
-三十多万个 NASL 插件编译完——中途断了还得从头再来。
+Nessus 是商业漏洞扫描器，官方不给容器包：得自己下 `.deb`、自己解决激活、自己等它把三十多万个
+NASL 插件编译完。这个仓库把这套流程固化成一个**完全自建**的镜像——不依赖任何第三方 Nessus 镜像，
+基础镜像是公开的 `ubuntu:22.04`，引擎从 Tenable 官方下载接口现取。
 
-这个仓库把这些步骤固化成一个 Docker 镜像：
-
-- **构建时选版本**：`--build-arg NESSUS_VERSION=10.12.6`，脚本自己去 Tenable 下载对应 `.deb`
-- **更新插件一条命令**：下载、校验、导入、等编译，全过程有输出，失败会明确报错
-- **容器不会中途消失**：`update.sh` 里停服务不会把容器带走
-- **重装不重编译**：插件包和编译结果都放在 Docker 卷里
-
-适合：临时起一台扫描器、内网做资产盘点、想跟着插件更新又不想碰系统包管理。
+- **引擎版本可选**：`--build-arg NESSUS_VERSION=10.12.6`
+- **插件包一条命令更新**：下载、校验签名、导入、等编译，全程有输出，失败会明确报错
+- **踩过的坑都写进脚本了**：缺 Java、feed 指纹对不上、离线环境自动更新卡 503
 
 ---
 
@@ -34,245 +31,194 @@ Nessus 是商业漏洞扫描器，官方不给免安装的容器包：你得自�
 
 | 项 | 要求 | 说明 |
 |---|---|---|
-| Docker | 20.10+ | 用 `docker compose` 需要 compose v2 |
-| 内存 | ≥ 6 GB | 4 核 5.8 GB 实测编译约 20 分钟，低于 4 GB 容易 OOM |
-| 磁盘 | ≥ 15 GB | 插件本体 4.6 GB + 编译产物 4.6 GB + 插件包 1 GB |
-| 出网 | `www.tenable.com`、`plugins.nessus.org` | 前者拉安装包，后者拉插件包 |
+| Docker | 20.10+ | compose 需 v2 |
+| 内存 | ≥ 6 GB | 4 核 5.8 GB 实测编译约 25 分钟 |
+| 磁盘 | ≥ 15 GB | 插件 4.6 GB + 编译产物 4.6 GB + 插件包 1 GB |
+| 出网 | `www.tenable.com`（拉安装包）、`plugins.nessus.org`（拉插件包） | 构建期与更新期各一次 |
+| 一个 Nessus 激活码 | 去 [tenable.com](https://www.tenable.com/products/nessus/nessus-essentials) 申请，免费 | 每个实例用一次，用完即绑定 |
 
 ---
 
-## 开始部署
+## 快速开始
 
-### 用 compose（推荐）
+### 1. 构建
 
 ```bash
 git clone https://github.com/Heamborn/nessus-docker.git
 cd nessus-docker
 
-docker compose build          # 构建镜像，会自动下载 Nessus 10.12.6
-docker compose up -d          # 起容器，端口 8834
-```
-
-### 用脚本
-
-```bash
-./deploy.sh                   # 构建 + 起容器
-```
-
-### 用原生 docker
-
-```bash
+docker compose build
+# 或
 docker build -t nessus:10.12.6 .
+```
 
+如果拉不动 Docker Hub（`registry-1.docker.io` 超时），换官方公共镜像源即可，不用配代理：
+
+```bash
+docker build --build-arg BASE_IMAGE=public.ecr.aws/docker/library/ubuntu:22.04 -t nessus:10.12.6 .
+```
+
+### 2. 启动并激活
+
+激活码通过环境变量传进去，容器**首次启动会自己注册一次**，之后不再重复：
+
+```bash
 docker run -itd --name nessus --restart always \
   -p 8834:8834 \
+  -e ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XXXX \
   -v nessus_cache:/nessus/cache \
   nessus:10.12.6
 ```
 
-`-v nessus_cache:/nessus/cache` 建议带上，否则每次重建容器都要重下 1 GB 插件包。
-想要连编译结果一起保留，再加一条 `-v nessus_data:/opt/nessus/var/nessus`，见下面「要不要持久化」。
+compose 用户在 `docker-compose.yml` 里填 `environment: ACTIVATION_CODE`。
 
-起来之后打开 `https://<宿主机IP>:8834`。证书是自签的，浏览器会拦一下，点继续就行。
-
----
-
-## 第一次进后台
-
-镜像里已经有一个 `admin` 账号，但密码是原镜像作者留的谜题。直接重置一个你记得住的：
+离线环境用 license 文件代替激活码（`fetch --challenge` → offline.php 换回来的那个文件）：
 
 ```bash
-docker exec -it nessus sh -c 'printf "你的新密码\n你的新密码\n" \
+-v /path/to/license.lic:/nessus/license.lic \
+-e NESSUS_LICENSE_FILE=/nessus/license.lic
+```
+
+> 激活码是**一次性**的：注册成功后它与这台实例绑定，再拿去注册别的实例会被 Tenable 拒（400）。
+> 重新部署请申请新码，或者把已注册实例的 `/opt/nessus/var/nessus` 与 `/opt/nessus/etc/nessus` 一起保留下来复用。
+
+### 3. 进后台
+
+```bash
+docker exec -it nessus sh -c 'printf "你的密码\n你的密码\n" \
   | /opt/nessus/sbin/nessuscli chpasswd admin'
 ```
 
-看到 `Password changed for admin` 就可以用它登录了。
+浏览器打开 `https://<IP>:8834`，账号 `admin`。
 
----
+### 4. 导入插件包（必须有这一步）
 
-## 导入插件包（这是关键一步）
+刚起来的容器只有十几个引导文件，**不导入插件包就没有扫描能力**。
 
-刚起来的容器里只有 17 个引导文件，**必须导入一次插件包**才有扫描能力。
-
-### 第一步：拿到属于你这台实例的机器码
+拿机器码：
 
 ```bash
 docker exec nessus /opt/nessus/sbin/nessuscli fetch --challenge
 ```
 
-输出里那串 40 位十六进制就是机器码（Challenge Code）：
+输出里那串 40 位十六进制就是本实例的机器码，必须由这套实例现场生成，不能手编。
 
-```
-Challenge code: 300db798b04cc3ae15070dc9075581a0de7c7657
-```
-
-它必须由你要用的这套实例现场生成，**不能随手编一串**：Tenable 会把它和激活码绑在一起签发插件包地址，
-所以它和这台实例是绑定的。换容器、重建实例后要重新取一次。
-
-### 第二步：用激活码 + 机器码换下载地址
-
-1. 到 [tenable.com](https://www.tenable.com/products/nessus/nessus-essentials) 申请激活码（Activation Code）
-2. 打开 [plugins.nessus.org/v2/offline.php](https://plugins.nessus.org/v2/offline.php)
-3. 把**激活码**和上一步的 **Challenge code** 一起填进去
-
-会得到一个下载地址，长这样：
+然后用**激活码 + 机器码**去 [plugins.nessus.org/v2/offline.php](https://plugins.nessus.org/v2/offline.php)
+换下载地址，形如：
 
 ```
 https://plugins.nessus.org/v2/nessus.php?f=all-2.0.tar.gz&u=<32位>&p=<32位>
 ```
 
-同一个地址把 `all-2.0.tar.gz` 换成 `all-2.0.tar.gz.sig` 或 `all-2.0.tar.gz.sha256`，
-就是它的签名和校验和——脚本会自动去取，你不用手动下。
-
-### 第三步：导入
+导入：
 
 ```bash
 docker exec -it nessus /nessus/update.sh "<上一步的地址>"
 ```
 
-脚本会依次做六件事，每一步都有打印：
-
-| 步骤 | 做什么 |
-|---|---|
-| 1/6 | 下载插件包（约 1 GB）；如果缓存里已有就直接用 |
-| 2/6 | 停掉 nessusd |
-| 3/6 | `nessuscli update <包> <签名>` 导入，并校验 `.sha256` |
-| 4/6 | 把插件集版本写进 `plugin_feed_info.inc` |
-| 5/6 | 启动 nessusd，开始编译 |
-| 6/6 | 轮询服务状态，等编译真正结束 |
-
-编译期间会看到 `已等待 xxxs` 的进度，跑完打印：
+脚本六步：下载 → 校验 sha256 + 取 .sig → 停服务 → `nessuscli update <包> <签名>` →
+写 feed 指纹 → 启动并等编译。跑完打印：
 
 ```
-[i] 编译完成，用时 1185s
+[i] 编译完成，用时 1500s
       引擎: nessusd (Nessus) 10.12.6 [build R20073] for Linux
-      插件集: 202610032324
+      插件集: 202610042310
+      插件库: 1815 MB
       访问: https://<本机IP>:8834
 ```
 
-这时候刷新后台，插件数就是三十四万多了。
+---
 
-### 下载老是被掐断怎么办
+## 三个必须知道的坑（脚本已经处理）
 
-`plugins.nessus.org` 走 Cloudflare，长连接经常在中途静默停住（TCP 还连着，但不再给数据），
-而且服务端**不支持断点续传**——断了只能从头来。仓库里带了一个抗抖动的下载器：
+**1. 没有 Java，编译到最后一刻会前功尽弃**
 
-```bash
-docker cp scripts/fetch-feed.sh nessus:/nessus/
-docker exec -it nessus bash /nessus/fetch-feed.sh "<插件包地址>" /nessus/cache
+Nessus 编译插件、生成 attributes 索引时会 fork `java`。镜像里缺 JDK 时日志出现
+`execvp(java) failed`，编译看起来完成了，但紧接着插件目录被清空、DB 归零。
+Dockerfile 已装 `openjdk-8-jre-headless`。
 
-# 下好之后按本地包导入
-docker exec -it nessus /nessus/update.sh \
-  /nessus/cache/all-2.0.tar.gz /nessus/cache/all-2.0.tar.gz.sig
-```
+**2. `PLUGIN_SET` / `PLUGIN_FEED` 必须等于插件包自带的值**
 
-它做三件事：45 秒内速度低于 200 KB/s 就判定卡死并重连、最多试 12 轮、下完用 `.sha256` 对一遍。
+nessusd 会拿 `plugin_feed_info.inc` 和插件内容对账，不一致就打印
+`Could not validate plugin feed`，然后把插件目录清空、编译成果全部作废。
+
+- `PLUGIN_SET` 要从包内 `plugin_feed_info.inc` 直接读，**不能**用 `plugins.php` 的当前时间戳（那个一直在变）
+- `PLUGIN_FEED` 要跟包一致（免费包是 `HomeFeed (Non-commercial use only)`），不要硬写成 `ProfessionalFeed`
+
+**3. 未注册实例会被清空；自动更新会把服务卡在 503**
+
+- 实例未注册时也能导入编译，但收尾校验授权失败 → 清空插件。所以 `ACTIVATION_CODE` 不是可选项
+- Nessus 会自己联网拉 feed，拉不到就停在 `feed_status: downloading-failed`，网页一直转圈。
+  `start.sh` 和 `update.sh` 都会先 `nessuscli fix --set auto_update=no`
+
+---
+
+## 授权说明（重要）
+
+| 方式 | 结果 | 说明 |
+|---|---|---|
+| 官方激活码（本仓库默认） | `license.type = essentials`，IP 数、到期时间由激活码决定 | 合法、可自动更新、可长期使用；插件包也可换成在线自动更新 |
+| SecurityCenter 托管模式（`nessuscli fetch --security-center`） | `license.type = sc_scanner`，`ips = 2147483647`，无到期 | 看起来"不限 IP"，但授权校验由 SC 侧完成；本地无有效 SC 授权时，编译收尾仍会 `Could not validate the license` 并清空插件 |
+
+结论：**想要稳定可用，就老老实实用激活码注册。** 网上流传的"无限 IP"是 SC 托管态，
+只有在 SecurityCenter 侧确实授权过扫描端时才成立，凭一个 Essentials 激活码复现不出来。
 
 ---
 
 ## 日常使用
 
-### 跟着插件更新
+**跟着插件更新**：重新生成插件包地址（机器码不用换），再跑一次 `update.sh`。
 
-有新插件包时，重新拿一个地址（机器码不用换），再跑一次 `update.sh` 就行，缓存里旧的包会被覆盖。
-
-### 看编译进度
+**看编译进度**：
 
 ```bash
 docker exec -it nessus tail -f /opt/nessus/var/nessus/logs/nessusd.messages
-```
-
-只想看规模变化：
-
-```bash
 docker exec -it nessus ls -lh /opt/nessus/var/nessus/plugins-*.db
 ```
 
-`plugins-code.db` 会一路涨到 1.8 GB 左右，涨完并稳定下来，再等两分钟就绪。
-
-### 换一个 Nessus 版本
+**换引擎版本**：
 
 ```bash
 docker build --build-arg NESSUS_VERSION=10.12.6 -t nessus:10.12.6 .
 ```
 
-Dockerfile 里没有写死的下载链接：它会去 Tenable 的公开下载接口，按
-`Nessus-<版本>-ubuntu1604_amd64.deb` 反查真实下载 id 再拉。构建最后会核对装出来的版本号和参数一致，
-不一致直接失败。改完版本号记得重建镜像、重建容器。
-
-### 要不要持久化
-
-默认**不持久化**：容器删了就没了，重建容器会重新编译二十多分钟。一次性用完就扔的场景，这样最省事。
-
-实测两种模式的差别（同一台 4 核 / 5.8 GB）：
-
-| 做法 | 重建/重启容器后 | 代价 |
-|---|---|---|
-| 默认（不挂数据卷） | 重新编译，约 **20 分钟** | 不占额外磁盘 |
-| 挂上两个数据卷 | 直接加载已有插件库，约 **100 秒** | 多占约 15 GB |
-
-想省编译时间就把下面两条**成对**挂上（只挂 `var` 不挂 `plugins`，插件文件不在，照样得重编）：
+**要不要持久化**：默认不持久化，重建容器要重新编译（约 25 分钟）。想省这一步就把
+`/opt/nessus/var/nessus` 和 `/opt/nessus/lib/nessus/plugins` **一起**挂卷（只挂前者，插件文件不在照样重编）：
 
 ```bash
-# compose：把 docker-compose.yml 里这两行注释打开
-#   - nessus_data:/opt/nessus/var/nessus
-#   - nessus_plugins:/opt/nessus/lib/nessus/plugins
-docker compose up -d
-
-# 脚本
-DATA_VOLUME=1 ./deploy.sh
-
-# 原生 docker
 -v nessus_data:/opt/nessus/var/nessus \
 -v nessus_plugins:/opt/nessus/lib/nessus/plugins
 ```
 
-前提是 `PLUGIN_SET` 不再变动——脚本已经保证这点（见下面「两个容易踩的坑」）。一旦手动改了插件集版本，
-或者导入了新的插件包，该重编还是得重编。
-
-## 两个容易踩的坑（脚本已经处理）
-
-**1. 插件集会被判过期，然后卡在 503**
-
-Nessus 每隔一段时间会自己联网拉插件 feed。离线环境里它拉不到，状态就停在
-`feed_status: downloading-failed`，网页一直转圈。`start.sh` 与 `update.sh` 都会先执行一次
-`nessuscli fix --set auto_update=no`，把这条路关掉，插件包只由你手动导入。
-
-**2. `PLUGIN_SET` 改动一次 = 全量重编译一次**
-
-`plugin_feed_info.inc` 里的 `PLUGIN_SET` 是插件集指纹，nessusd 会拿它和插件库对账，对不上就丢掉
-已经编译好的库重新编译（约二十分钟）。所以：
-
-- `update.sh` 导入时写一次，值优先取 `plugins.nessus.org/v2/plugins.php` 返回的当前时间戳
-  （比插件包自带的新，不容易很快被判过期），取不到才用插件包自带的值
-- `start.sh` 启动时**只在文件缺失时**生成，已有就原样沿用，绝不覆盖
+---
 
 ## 实测数据
 
-4 核 / 5.8 GB 内存 / Docker，插件包 `all-2.0.tar.gz`（982 MB）：
+4 核 / 5.8 GB，`ubuntu:22.04` + Nessus 10.12.6 + OpenJDK 8，插件包 982 MB：
 
 | 项 | 结果 |
 |---|---|
-| 引擎 | Nessus 10.12.6 [build R20073]，nasl 19.18.6 |
-| 插件集 | `PLUGIN_SET = "202610032324"` |
-| 插件文件 | 346,487 个 `.nasl` + 3,303 个 `.nbin` |
-| 实际加载 | 65 个族，**347,631** 个插件 |
-| 编译错误 | `Unable to compile` 0 条，`could not be loaded` 0 条 |
-| 全流程耗时 | 约 20 分钟（含最后的索引收尾） |
+| 引擎 | Nessus 10.12.6 [build R20073] / nasl 19.18.6 |
+| 插件集 | `202610042310` / `HomeFeed`（与包内一致） |
+| 插件文件 | 350,719 个 |
+| 实际加载 | 65 个族，**347,672** 个插件 |
+| 编译错误 | `Unable to compile` 0 条 |
+| feed 校验 | `Could not validate` 0 条 |
+| 全流程 | 约 25 分钟（含索引收尾与 DB 装载） |
 
 ---
 
 ## 出问题先看这里
 
-| 现象 | 原因 | 怎么处理 |
+| 现象 | 原因 | 处理 |
 |---|---|---|
-| 日志刷满 `Unable to compile` | 引擎太老，编不动新版插件 | 把 `NESSUS_VERSION` 调高重建，或换同代插件包 |
-| 报 `requires its detached signature file` | 少了签名文件 | 用 `update.sh`（它会自己取 `.sig`），或把签名作为第二个参数 |
-| 容器在跑，8834 打不开 | 还在编译 | 看 `nessusd.messages`，等编译完成 |
-| 编译完插件数还是 0 | 插件目录里残留了 `plugin_feed_info.inc` | `start.sh` 每次启动都会清掉，重启容器 |
-| `dpkg: unable to access dpkg status area` | 基础镜像裁掉了 `/var/lib/dpkg` | Dockerfile 已重建最小状态区，重新构建即可 |
-| 导入到一半容器没了 | nessusd 被当成 1 号进程 | 必须用本仓库的 `start.sh` 做入口（它后台托管 nessusd） |
-| 磁盘越用越少 | 编译产物约 10 GB | `docker system df` 看卷和悬空镜像，必要时 `docker system prune` |
+| 编译完插件数归零、目录被清空 | 缺 Java / feed 指纹不符 / 未注册 | 看 `nessusd.messages` 里是 `execvp(java) failed` 还是 `Could not validate` |
+| `Could not validate plugin feed` | `PLUGIN_SET` 或 `PLUGIN_FEED` 与包不一致 | 用仓库里的 `update.sh`，它从包里直接读这两个值 |
+| `Could not validate the license used on this scanner` | 实例未注册或激活码失效 | 重新注册，或申请新激活码 |
+| 网页一直转圈、`downloading-failed` | 自动更新在联网拉 feed | `nessuscli fix --set auto_update=no`，脚本已自动做 |
+| `requires its detached signature file` | 少了 `.sig` | 用 `update.sh`，或把签名作为第二个参数 |
+| 激活返回 `HTTP 400` | 激活码已被别的实例用掉 | 换新码，或复用已有实例的状态目录 |
+| 下载中途停住 | Cloudflare 静默停传且不支持断点续传 | 用 `scripts/fetch-feed.sh`，带卡死重试 |
 
 ---
 
@@ -280,19 +226,19 @@ Nessus 每隔一段时间会自己联网拉插件 feed。离线环境里它拉�
 
 ```
 .
-├── Dockerfile            # 基础镜像 + 指定版本引擎 + 脚本
-├── docker-compose.yml    # 一键起，带两个数据卷
-├── deploy.sh             # 构建 / 启动 / 可选更新插件
+├── Dockerfile            # ubuntu:22.04 + 官方 deb + OpenJDK8，引擎版本可选
+├── docker-compose.yml    # 一键起，带插件包缓存卷
+├── deploy.sh             # 构建 / 启动 / 可选更新
 └── scripts
-    ├── start.sh          # 容器 1 号进程：改 feed → 后台起 nessusd → 保活
-    ├── update.sh         # 下载 / 校验 / 导入 / 等编译
-    └── fetch-feed.sh     # 抗抖动的插件包下载器
+    ├── start.sh          # PID1：按需激活 → 写 feed → 关自动更新 → 托管 nessusd → 保活
+    ├── update.sh         # 下载 / 校验 / 导入 / 写指纹 / 等编译
+    └── fetch-feed.sh     # 抗抖动下载器（卡死重试 + sha256）
 ```
 
 ---
 
 ## 说明
 
-仅供非营利性学习与研究使用，请勿用于未授权的目标。
+仅供非营利性学习与研究使用，请勿用于未授权的目标。Nessus 为 Tenable 商业软件，请遵守其许可条款。
 
-感谢 [Adam-Zhong/nessus](https://github.com/Adam-Zhong/nessus) 提供的原始容器化思路与基础镜像。
+容器化思路参考 [Adam-Zhong/nessus](https://github.com/Adam-Zhong/nessus)。

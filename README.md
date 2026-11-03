@@ -2,11 +2,12 @@
 
 # nessus-docker
 
-**Nessus in Docker, one command to deploy, plugin feed updatable anytime, engine version your choice**
+**Build Nessus from the official package yourself: self-hosted base image, selectable engine, one-command plugin updates**
 
 ![docker](https://img.shields.io/badge/docker-compose%20%7C%20docker%20run-2496ED)
 ![engine](https://img.shields.io/badge/Nessus-10.12.6-00a4e4)
-![plugins](https://img.shields.io/badge/plugins-347%2C631-brightgreen)
+![plugins](https://img.shields.io/badge/plugins-347%2C672-brightgreen)
+![base](https://img.shields.io/badge/base-ubuntu%3A22.04-orange)
 
 [🇨🇳 简体中文](./README-cn.md)
 
@@ -16,19 +17,14 @@
 
 ## What this is
 
-Nessus is a commercial vulnerability scanner, and Tenable does not ship a ready-to-run container:
-you have to grab the `.deb` yourself, sort out activation, then wait for it to compile some 340k NASL
-plugins — and if the transfer dies halfway, you start over.
+Nessus is a commercial vulnerability scanner and Tenable does not ship a container: you fetch the `.deb`
+yourself, sort out activation, and wait for 340k+ NASL plugins to compile. This repo bakes that into an
+image **built entirely from scratch** — no third-party Nessus image, just plain `ubuntu:22.04` plus the
+official installer pulled from Tenable's download API at build time.
 
-This repo bakes those steps into one image:
-
-- **Pick the version at build time** — `--build-arg NESSUS_VERSION=10.12.6`; the build resolves the matching `.deb` from Tenable by itself
-- **Update the feed in one command** — download, verify, import, wait for compile, with progress at every stage and hard failures instead of silent spinning
-- **The container survives the update** — stopping the service inside `update.sh` no longer kills it
-- **Rebuilds don't recompile** — both the package and the compiled plugin DBs live in Docker volumes
-
-Good for: standing up a temporary scanner, internal asset inventory, or keeping up with plugin updates
-without touching the host package manager.
+- **Pick the engine version** — `--build-arg NESSUS_VERSION=10.12.6`
+- **Update the feed with one command** — download, verify signature, import, wait, with progress and hard failures
+- **The traps we hit are already handled** — missing Java, feed fingerprint mismatch, offline 503 hang
 
 ---
 
@@ -36,242 +32,177 @@ without touching the host package manager.
 
 | Item | Need | Why |
 |---|---|---|
-| Docker | 20.10+ | `docker compose` requires compose v2 |
-| RAM | ≥ 6 GB | measured: ~20 min compile on 4 vCPU / 5.8 GB; under 4 GB you risk OOM |
-| Disk | ≥ 15 GB | 4.6 GB plugins + 4.6 GB compiled DBs + 1 GB tarball |
-| Network | `www.tenable.com`, `plugins.nessus.org` | the installer and the plugin feed |
+| Docker | 20.10+ | compose needs v2 |
+| RAM | ≥ 6 GB | measured: ~25 min compile on 4 vCPU / 5.8 GB |
+| Disk | ≥ 15 GB | 4.6 GB plugins + 4.6 GB DBs + 1 GB tarball |
+| Network | `www.tenable.com`, `plugins.nessus.org` | installer at build time, feed at update time |
+| One activation code | free from [tenable.com](https://www.tenable.com/products/nessus/nessus-essentials) | one per instance, bound on first use |
 
 ---
 
-## Deploy
+## Quick start
 
-### With compose (recommended)
+### 1. Build
 
 ```bash
 git clone https://github.com/Heamborn/nessus-docker.git
 cd nessus-docker
 
-docker compose build          # builds the image, downloads Nessus 10.12.6
-docker compose up -d          # starts the container on :8834
-```
-
-### With the helper script
-
-```bash
-./deploy.sh                   # build + run
-```
-
-### With plain docker
-
-```bash
+docker compose build
+# or
 docker build -t nessus:10.12.6 .
+```
 
+If Docker Hub is unreachable (`registry-1.docker.io` timing out), use the public mirror — no proxy needed:
+
+```bash
+docker build --build-arg BASE_IMAGE=public.ecr.aws/docker/library/ubuntu:22.04 -t nessus:10.12.6 .
+```
+
+### 2. Run and activate
+
+The activation code goes in as an env var; the container registers itself **once** on first boot:
+
+```bash
 docker run -itd --name nessus --restart always \
   -p 8834:8834 \
+  -e ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XXXX \
   -v nessus_cache:/nessus/cache \
   nessus:10.12.6
 ```
 
-`-v nessus_cache:/nessus/cache` is recommended, otherwise every new container re-downloads 1 GB.
-Add `-v nessus_data:/opt/nessus/var/nessus` if you also want to keep the compiled state — see “Persistence”.
+For air-gapped setups use a license file instead (`fetch --challenge` → offline.php):
 
-Then open `https://<host-ip>:8834`. The certificate is self-signed — accept the browser warning.
+```bash
+-v /path/to/license.lic:/nessus/license.lic \
+-e NESSUS_LICENSE_FILE=/nessus/license.lic
+```
 
----
+> Activation codes are **single-use**: once registered, the code is bound to that instance and Tenable
+> rejects re-use elsewhere (HTTP 400). Request a fresh code for a new deployment, or keep the registered
+> instance's `/opt/nessus/var/nessus` and `/opt/nessus/etc/nessus` and reuse them.
 
-## First login
-
-The image already contains an `admin` account, but its password is the original author's little puzzle.
-Just reset it to something you know:
+### 3. Log in
 
 ```bash
 docker exec -it nessus sh -c 'printf "YourPassw0rd\nYourPassw0rd\n" \
   | /opt/nessus/sbin/nessuscli chpasswd admin'
 ```
 
-Once you see `Password changed for admin`, log in with it.
+Open `https://<host-ip>:8834`, user `admin`.
 
----
+### 4. Import the plugin feed (mandatory)
 
-## Import the plugin feed (the important step)
+A fresh container only has a handful of bootstrap files — without importing the feed it cannot scan.
 
-A fresh container only has 17 bootstrap files — **you must import the feed once** before it can scan.
-
-### Step 1: get the machine code for this instance
+Get the machine code:
 
 ```bash
 docker exec nessus /opt/nessus/sbin/nessuscli fetch --challenge
 ```
 
-The 40-hex string in the output is the machine code (Challenge Code):
+The 40-hex string is this instance's machine code; it must be generated by the instance you actually use.
 
-```
-Challenge code: 300db798b04cc3ae15070dc9075581a0de7c7657
-```
-
-It has to be generated by the instance you are actually going to use — **do not invent a hex string**.
-Tenable binds it to your activation code when issuing the feed URL, so it belongs to this instance.
-Regenerate it after recreating the container.
-
-### Step 2: turn activation code + machine code into a download URL
-
-1. Request an activation code at [tenable.com](https://www.tenable.com/products/nessus/nessus-essentials)
-2. Open [plugins.nessus.org/v2/offline.php](https://plugins.nessus.org/v2/offline.php)
-3. Enter the **activation code** together with the **Challenge code** from step 1
-
-You get a URL like:
+Feed that plus your activation code into
+[plugins.nessus.org/v2/offline.php](https://plugins.nessus.org/v2/offline.php) and you get a URL like:
 
 ```
 https://plugins.nessus.org/v2/nessus.php?f=all-2.0.tar.gz&u=<32 hex>&p=<32 hex>
 ```
 
-Swapping `all-2.0.tar.gz` for `all-2.0.tar.gz.sig` or `all-2.0.tar.gz.sha256` yields the signature and
-the checksum — the script fetches those for you.
-
-### Step 3: import
+Import:
 
 ```bash
-docker exec -it nessus /nessus/update.sh "<URL from step 2>"
+docker exec -it nessus /nessus/update.sh "<URL>"
 ```
 
-Six stages, each printed:
-
-| Stage | What happens |
-|---|---|
-| 1/6 | download the tarball (~1 GB), or reuse the cached one |
-| 2/6 | stop nessusd |
-| 3/6 | `nessuscli update <pkg> <sig>`, verifying `.sha256` first |
-| 4/6 | write the plugin set version into `plugin_feed_info.inc` |
-| 5/6 | start nessusd and begin compiling |
-| 6/6 | poll the server status until compilation really finishes |
-
-During compilation you see `已等待 xxxs` progress; at the end:
+Six stages: download → verify sha256 and fetch `.sig` → stop the service →
+`nessuscli update <pkg> <sig>` → write the feed fingerprint → start and wait for compilation. Result:
 
 ```
-[i] 编译完成，用时 1185s
+[i] 编译完成，用时 1500s
       引擎: nessusd (Nessus) 10.12.6 [build R20073] for Linux
-      插件集: 202610032324
+      插件集: 202610042310
+      插件库: 1815 MB
       访问: https://<本机IP>:8834
 ```
 
-Refresh the web UI and the plugin count is 340k+.
+---
 
-### Download keeps getting cut off?
+## Three traps you must know (handled here)
 
-`plugins.nessus.org` sits behind Cloudflare and long transfers often go silent mid-stream
-(TCP stays established, no more data arrives). The server does **not** support Range requests, so an
-interrupted download must restart from zero. A stall-resistant downloader is bundled:
+**1. Without Java the compile is wasted at the last step**
 
-```bash
-docker cp scripts/fetch-feed.sh nessus:/nessus/
-docker exec -it nessus bash /nessus/fetch-feed.sh "<URL>" /nessus/cache
+Nessus forks `java` while compiling plugins and building the attributes index. Without a JDK you get
+`execvp(java) failed`; the compile appears to finish, then the plugin directory is wiped and the DB reset.
+The Dockerfile installs `openjdk-8-jre-headless`.
 
-# then import the local file
-docker exec -it nessus /nessus/update.sh \
-  /nessus/cache/all-2.0.tar.gz /nessus/cache/all-2.0.tar.gz.sig
-```
+**2. `PLUGIN_SET` / `PLUGIN_FEED` must match what the package itself says**
 
-It aborts and reconnects when throughput stays below 200 KB/s for 45 s, retries up to 12 times, and
-verifies `.sha256` at the end.
+nessusd reconciles `plugin_feed_info.inc` against the plugin content; on mismatch it logs
+`Could not validate plugin feed` and then purges the plugin dir and all compiled output.
+
+- read `PLUGIN_SET` straight out of the package (`plugin_feed_info.inc`), **never** from `plugins.php`,
+  whose timestamp keeps moving
+- keep `PLUGIN_FEED` as shipped (`HomeFeed (Non-commercial use only)`); do not force `ProfessionalFeed`
+
+**3. An unregistered instance gets wiped, and auto-update hangs the UI at 503**
+
+- unregistered instances still import and compile, but the licence check at the end fails and everything is purged
+- Nessus tries to pull the feed on its own and ends in `feed_status: downloading-failed`. Both `start.sh`
+  and `update.sh` run `nessuscli fix --set auto_update=no` first
+
+---
+
+## Licensing
+
+| Approach | Result | Notes |
+|---|---|---|
+| Official activation code (default here) | `license.type = essentials`; IPs and expiry come from the code | legitimate, updatable, long-lived |
+| SecurityCenter managed mode (`fetch --security-center`) | `license.type = sc_scanner`, `ips = 2147483647`, no expiry | looks "unlimited", but licence validation is delegated to the SC manager; without a valid SC-side authorisation the compile still ends in `Could not validate the license` and a purge |
+
+In short: **register with a real activation code if you want a stable scanner.** The widely circulated
+"unlimited" mode is the SC-managed scanner, which only holds when SecurityCenter really authorised that
+scanner — it cannot be reproduced from an Essentials code.
 
 ---
 
 ## Day-to-day
 
-### Follow plugin updates
+**Follow plugin updates** — generate a fresh feed URL (machine code stays) and run `update.sh` again.
 
-When a new feed is available, generate a fresh URL (machine code stays the same) and run `update.sh`
-again — the cached tarball gets replaced.
-
-### Watch compilation
+**Watch compilation**:
 
 ```bash
 docker exec -it nessus tail -f /opt/nessus/var/nessus/logs/nessusd.messages
-```
-
-Just the size growth:
-
-```bash
 docker exec -it nessus ls -lh /opt/nessus/var/nessus/plugins-*.db
 ```
 
-`plugins-code.db` climbs to roughly 1.8 GB; once it stops growing, the server is ready a couple of
-minutes later.
-
-### Change the Nessus version
+**Change the engine version**:
 
 ```bash
 docker build --build-arg NESSUS_VERSION=10.12.6 -t nessus:10.12.6 .
 ```
 
-There is no hardcoded download link in the Dockerfile: it consults Tenable's public download API,
-looks up the real download id for `Nessus-<version>-ubuntu1604_amd64.deb`, and fetches it. The build
-asserts that the installed version matches the argument and fails otherwise. Rebuild the image and
-recreate the container afterwards.
+**Persistence** — off by default; recreating the container recompiles (~25 min). To skip that, mount
+**both** `/opt/nessus/var/nessus` and `/opt/nessus/lib/nessus/plugins`; mounting only the former leaves the
+plugin files missing and it recompiles anyway.
 
-### Persistence
-
-**Off by default**: the container's contents die with it, so recreating it means a 20-minute recompile.
-For throwaway use that is the simplest option.
-
-Measured difference on the same 4 vCPU / 5.8 GB host:
-
-| Setup | After recreating / restarting the container | Cost |
-|---|---|---|
-| default (no data volumes) | full recompile, **~20 min** | nothing extra |
-| both data volumes mounted | loads the existing DB, **~100 s** | ~15 GB disk |
-
-To skip the recompile, mount **both** paths (persisting only `var` leaves the plugin files missing, so it
-recompiles anyway):
-
-```bash
-# compose: uncomment these two lines in docker-compose.yml
-#   - nessus_data:/opt/nessus/var/nessus
-#   - nessus_plugins:/opt/nessus/lib/nessus/plugins
-docker compose up -d
-
-# script
-DATA_VOLUME=1 ./deploy.sh
-
-# plain docker
--v nessus_data:/opt/nessus/var/nessus \
--v nessus_plugins:/opt/nessus/lib/nessus/plugins
-```
-
-This only holds while `PLUGIN_SET` stays put — the scripts guarantee that (see “Two traps”). If you edit
-the plugin set version by hand, or import a new feed, it recompiles as expected.
-
-## Two traps (already handled by the scripts)
-
-**1. The plugin set gets marked stale and the server hangs at 503**
-
-Nessus periodically pulls the plugin feed on its own. With no reachable feed it ends up in
-`feed_status: downloading-failed` and the web UI spins forever. Both `start.sh` and `update.sh` run
-`nessuscli fix --set auto_update=no` first, closing that path — the feed only ever comes from your
-manual import.
-
-**2. Changing `PLUGIN_SET` once costs a full recompile**
-
-`PLUGIN_SET` in `plugin_feed_info.inc` is the fingerprint of the plugin set. If it does not match the
-plugin DB, nessusd throws the compiled DB away and recompiles (~20 minutes). Therefore:
-
-- `update.sh` writes it once at import time, preferring the live timestamp from
-  `plugins.nessus.org/v2/plugins.php` (newer than the value inside the tarball, so it ages out slower)
-  and falling back to the tarball value
-- `start.sh` only creates the file when it is missing — an existing one is never rewritten
+---
 
 ## Verified numbers
 
-4 vCPU / 5.8 GB RAM / Docker, feed `all-2.0.tar.gz` (982 MB):
+4 vCPU / 5.8 GB, `ubuntu:22.04` + Nessus 10.12.6 + OpenJDK 8, feed package 982 MB:
 
 | Item | Result |
 |---|---|
-| Engine | Nessus 10.12.6 [build R20073], nasl 19.18.6 |
-| Plugin set | `PLUGIN_SET = "202610032324"` |
-| Files | 346,487 `.nasl` + 3,303 `.nbin` |
-| Loaded | 65 families, **347,631** plugins |
-| Compile errors | `Unable to compile` 0, `could not be loaded` 0 |
-| End-to-end | ~20 minutes including the final index pass |
+| Engine | Nessus 10.12.6 [build R20073] / nasl 19.18.6 |
+| Plugin set | `202610042310` / `HomeFeed` (matches the package) |
+| Files | 350,719 |
+| Loaded | 65 families, **347,672** plugins |
+| Compile errors | `Unable to compile` 0 |
+| Feed validation | `Could not validate` 0 |
+| End-to-end | ~25 minutes including index and DB load |
 
 ---
 
@@ -279,13 +210,13 @@ plugin DB, nessusd throws the compiled DB away and recompiles (~20 minutes). The
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Log flooded with `Unable to compile` | engine too old for the feed | raise `NESSUS_VERSION` and rebuild, or use a matching feed |
-| `requires its detached signature file` | signature missing | use `update.sh` (it fetches `.sig`), or pass the signature as the second argument |
-| Container runs but :8834 does not answer | still compiling | watch `nessusd.messages` and wait |
-| Plugin count is 0 after compilation | a stale `plugin_feed_info.inc` in the plugin dir | `start.sh` removes it on every boot — restart the container |
-| `dpkg: unable to access dpkg status area` | base image stripped `/var/lib/dpkg` | the Dockerfile rebuilds a minimal status area; rebuild |
-| Container vanishes mid-import | nessusd ended up as PID 1 | use this repo's `start.sh` as entrypoint (it supervises nessusd) |
-| Disk keeps filling | compile artifacts are ~10 GB | inspect `docker system df`, prune when needed |
+| Plugin count drops to 0, directory wiped | missing Java / feed mismatch / not registered | check `nessusd.messages` for `execvp(java)` vs `Could not validate` |
+| `Could not validate plugin feed` | `PLUGIN_SET` or `PLUGIN_FEED` differs from the package | use this repo's `update.sh`, it reads both from the package |
+| `Could not validate the license used on this scanner` | instance not registered, or code expired | register again / request a new code |
+| UI spins, `downloading-failed` | auto-update trying to reach the feed | `nessuscli fix --set auto_update=no` (scripts do it) |
+| `requires its detached signature file` | missing `.sig` | use `update.sh`, or pass the signature as the 2nd argument |
+| Activation returns `HTTP 400` | code already used by another instance | new code, or reuse the registered state directory |
+| Download stalls mid-transfer | Cloudflare goes silent, no Range support | use `scripts/fetch-feed.sh` (stall retry) |
 
 ---
 
@@ -293,13 +224,13 @@ plugin DB, nessusd throws the compiled DB away and recompiles (~20 minutes). The
 
 ```
 .
-├── Dockerfile            # base image + selected engine version + scripts
-├── docker-compose.yml    # one-shot bring-up with both volumes
+├── Dockerfile            # ubuntu:22.04 + official deb + OpenJDK8, engine version selectable
+├── docker-compose.yml    # one-shot bring-up with the package cache volume
 ├── deploy.sh             # build / run / optional feed update
 └── scripts
-    ├── start.sh          # PID1: rewrite feed -> start nessusd in background -> keep alive
-    ├── update.sh         # download / verify / import / wait for compile
-    └── fetch-feed.sh     # stall-resistant feed downloader
+    ├── start.sh          # PID1: activate → write feed → disable auto-update → supervise nessusd
+    ├── update.sh         # download / verify / import / write fingerprint / wait
+    └── fetch-feed.sh     # stall-resistant downloader (+ sha256)
 ```
 
 ---
@@ -307,6 +238,6 @@ plugin DB, nessusd throws the compiled DB away and recompiles (~20 minutes). The
 ## Notes
 
 For non-profit study and research only. Do not use it against systems you are not authorized to test.
+Nessus is commercial software by Tenable; respect its licence terms.
 
-Thanks to [Adam-Zhong/nessus](https://github.com/Adam-Zhong/nessus) for the original containerization
-approach and base image.
+Containerisation approach inspired by [Adam-Zhong/nessus](https://github.com/Adam-Zhong/nessus).
